@@ -240,16 +240,16 @@ class AttachmentFile extends VerySimpleModel {
     }
 
     function download($disposition=false, $expires=false) {
-        $disposition = $disposition ?: 'inline';
+        $disposition = ($disposition && strcasecmp($disposition, 'inline') == 0
+              && strpos($this->getType(), 'image/') !== false)
+            ? 'inline' : 'attachment';
         $bk = $this->open();
         if ($bk->sendRedirectUrl($disposition))
             return;
         $ttl = ($expires) ? $expires - Misc::gmtime() : false;
         $this->makeCacheable($ttl);
         $type = $this->getType() ?: 'application/octet-stream';
-        if (isset($_REQUEST['overridetype']))
-            $type = $_REQUEST['overridetype'];
-        Http::download($this->getName(), $type, null, 'inline');
+        Http::download($this->getName(), $type, null, $disposition);
         header('Content-Length: '.$this->getSize());
         $this->sendData(false);
         exit();
@@ -627,20 +627,17 @@ class AttachmentFile extends VerySimpleModel {
      * canned-response, or faq point to any more.
      */
     static function deleteOrphans() {
+        $sql = "SELECT `id` FROM ".FILE_TABLE.
+            " A1 WHERE (A1.ft = 'T' AND A1.created < NOW() - INTERVAL 1 DAY)".
+            " AND NOT EXISTS (SELECT id FROM ".ATTACHMENT_TABLE.
+            " A2 WHERE A1.`id` = A2.`file_id`)";
 
-        // XXX: Allow plugins to define filetypes which do not represent
-        //      files attached to tickets or other things in the attachment
-        //      table and are not logos
-        $files = static::objects()
-            ->filter(array(
-                'attachments__object_id__isnull' => true,
-                'ft' => 'T',
-                'created__lt' => SqlFunction::NOW()->minus(SqlInterval::DAY(1)),
-            ));
-
-        foreach ($files as $f) {
-            if (!$f->delete())
-                break;
+        if (($res=db_query($sql)) && db_num_rows($res)) {
+            while (list($id) = db_fetch_row($res)) {
+                if ($f = static::lookup((int) $id))
+                    if (!$f->delete())
+                        break;
+            }
         }
 
         return true;
